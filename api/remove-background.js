@@ -15,7 +15,7 @@ export default async function handler(req, res) {
   }
   try {
     const imageBuffer = req.body;
-    const resultBlob = await removeBackground(imageBuffer);
+    const resultBlob = await removeBackground(imageBuffer, { model: 'medium' });
     const arrayBuffer = await resultBlob.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
     res.setHeader('Content-Type', 'image/png');
