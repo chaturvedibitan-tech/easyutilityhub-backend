@@ -1,3 +1,4 @@
+// Final version
 // api/remove-background.js
 import { removeBackground } from "@imgly/background-removal-node";
 
