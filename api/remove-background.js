@@ -1,12 +1,22 @@
 import FormData from 'form-data';
 
-// This code does not need the CORS helper from before, as Vercel handles it for API routes.
-export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method Not Allowed' });
-  }
+// Helper function to set CORS headers and handle preflight requests
+const allowCors = (fn) => async (req, res) => {
+  res.setHeader('Access-Control-Allow-Credentials', true);
+  res.setHeader('Access-Control-Allow-Origin', '*'); // Or specify your domain
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
 
-  // Get the API key securely from Vercel's environment variables
+  // This is the crucial part that handles the "permission slip" (OPTIONS) request
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
+    return;
+  }
+  return await fn(req, res);
+};
+
+// Main handler function for the remove.bg API call
+async function handler(req, res) {
   const apiKey = process.env.REMOVE_BG_API_KEY;
   if (!apiKey) {
     return res.status(500).json({ error: 'API key is not configured.' });
@@ -14,17 +24,13 @@ export default async function handler(req, res) {
 
   try {
     const imageBuffer = req.body;
-
     const formData = new FormData();
-    formData.append('image_file', imageBuffer, 'image.jpg'); // The filename doesn't matter
+    formData.append('image_file', imageBuffer, 'image.jpg');
     formData.append('size', 'auto');
 
     const response = await fetch('https://api.remove.bg/v1/removebg', {
       method: 'POST',
-      headers: {
-        'X-Api-Key': apiKey,
-        ...formData.getHeaders(),
-      },
+      headers: { 'X-Api-Key': apiKey, ...formData.getHeaders() },
       body: formData,
     });
 
@@ -35,7 +41,6 @@ export default async function handler(req, res) {
     }
 
     const buffer = await response.arrayBuffer();
-
     res.setHeader('Content-Type', 'image/png');
     res.status(200).send(Buffer.from(buffer));
 
@@ -44,3 +49,6 @@ export default async function handler(req, res) {
     res.status(500).json({ error: 'Failed to process the image.' });
   }
 }
+
+// Wrap the handler with the CORS middleware
+export default allowCors(handler);
