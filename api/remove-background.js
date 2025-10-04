@@ -5,7 +5,7 @@ const allowCors = (fn) => async (req, res) => {
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Api-Key');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-api-key');
 
   if (req.method === 'OPTIONS') {
     res.status(200).end();
@@ -14,32 +14,30 @@ const allowCors = (fn) => async (req, res) => {
   return await fn(req, res);
 };
 
-// Main API handler
+// Main API handler for ClipDrop
 async function handler(req, res) {
-  const apiKey = process.env.REMOVE_BG_API_KEY;
+  const apiKey = process.env.CLIPDROP_API_KEY;
   if (!apiKey) {
-    return res.status(500).json({ error: 'API key not configured.' });
+    return res.status(500).json({ error: 'API key is not configured.' });
   }
 
   try {
-    // Since Vercel's default parser is on, the raw image is in req.body
     const imageBuffer = req.body;
 
     const formData = new FormData();
-    formData.append('image_file', imageBuffer, 'image.jpg');
-    formData.append('size', 'auto');
+    formData.append('image_file', imageBuffer, 'background.jpg');
 
-    const response = await fetch('https://api.remove.bg/v1/removebg', {
+    const response = await fetch('https://clipdrop-api.co/remove-background/v1', {
       method: 'POST',
       headers: {
-        'X-Api-Key': apiKey,
+        'x-api-key': apiKey,
       },
-      body: imageBuffer, // Send the buffer directly
+      body: imageBuffer,
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("remove.bg API error:", errorText);
+      console.error("ClipDrop API error:", errorText);
       throw new Error(`API error (${response.status}): ${errorText}`);
     }
 
