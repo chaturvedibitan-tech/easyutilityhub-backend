@@ -1,28 +1,11 @@
 import FormData from 'form-data';
 
-// Vercel config to disable the automatic body parser.
-// This allows us to handle the raw image stream directly for more reliability.
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
-
-// Helper function to read a request stream into a single buffer.
-async function buffer(readable) {
-  const chunks = [];
-  for await (const chunk of readable) {
-    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
-  }
-  return Buffer.concat(chunks);
-}
-
 // CORS and Preflight request handler
 const allowCors = (fn) => async (req, res) => {
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Api-Key');
 
   if (req.method === 'OPTIONS') {
     res.status(200).end();
@@ -35,13 +18,12 @@ const allowCors = (fn) => async (req, res) => {
 async function handler(req, res) {
   const apiKey = process.env.REMOVE_BG_API_KEY;
   if (!apiKey) {
-    console.error("API Key not found in environment variables.");
-    return res.status(500).json({ error: 'API key is not configured.' });
+    return res.status(500).json({ error: 'API key not configured.' });
   }
 
   try {
-    // Manually buffer the raw image data from the request stream.
-    const imageBuffer = await buffer(req);
+    // Since Vercel's default parser is on, the raw image is in req.body
+    const imageBuffer = req.body;
 
     const formData = new FormData();
     formData.append('image_file', imageBuffer, 'image.jpg');
@@ -49,8 +31,10 @@ async function handler(req, res) {
 
     const response = await fetch('https://api.remove.bg/v1/removebg', {
       method: 'POST',
-      headers: { 'X-Api-Key': apiKey, ...formData.getHeaders() },
-      body: formData,
+      headers: {
+        'X-Api-Key': apiKey,
+      },
+      body: imageBuffer, // Send the buffer directly
     });
 
     if (!response.ok) {
