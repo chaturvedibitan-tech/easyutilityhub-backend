@@ -1,6 +1,6 @@
 export const config = {
   api: {
-    bodyParser: false, // Let the raw request stream through
+    bodyParser: false,
   },
 };
 
@@ -19,10 +19,13 @@ export default async function handler(req, res) {
       method: 'POST',
       headers: {
         'x-api-key': apiKey,
-        // Forward the Content-Type header from the original request
-        'Content-Type': req.headers['content-type'], 
+        'Content-Type': req.headers['content-type'],
       },
-      body: req, // Stream the incoming request body directly
+      body: req.body,
+      // --- THIS IS THE FINAL, CRITICAL FIX ---
+      // This line is required by the server environment to stream the file.
+      duplex: 'half',
+      // ------------------------------------
     });
 
     if (!response.ok) {
@@ -31,7 +34,6 @@ export default async function handler(req, res) {
       return res.status(response.status).json({ error: `API Error: ${errorText}` });
     }
 
-    // Stream the successful response back to the user
     res.setHeader('Content-Type', 'image/png');
     return response.body.pipe(res);
 
