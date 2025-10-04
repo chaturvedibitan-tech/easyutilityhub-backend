@@ -1,78 +1,58 @@
-import FormData from 'form-data';
-
-// Disable Vercel's default parser to handle the raw image stream
+// This configuration is critical. It tells Vercel to not interfere with the request body,
+// allowing us to stream it directly. This is the core fix from your analysis.
 export const config = {
   api: {
     bodyParser: false,
   },
 };
 
-// Helper to buffer the entire request stream into a single object
-async function buffer(readable) {
-  const chunks = [];
-  for await (const chunk of readable) {
-    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+export default async function handler(req, res) {
+  // 1. Enforce POST method
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    return res.status(405).end('Method Not Allowed');
   }
-  return Buffer.concat(chunks);
-}
 
-// CORS handler for browser security
-const allowCors = (fn) => async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-api-key');
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
-  }
-  return await fn(req, res);
-};
-
-// The main function
-async function handler(req, res) {
-  const apiKey = process.env.CLIPDROP_API_KEY;
-  if (!apiKey) {
-    return res.status(500).json({ error: 'API key is not configured.' });
+  // 2. Securely get the API key
+  const clipDropApiKey = process.env.CLIPDROP_API_KEY;
+  if (!clipDropApiKey) {
+    console.error('CLIPDROP_API_KEY environment variable not set.');
+    return res.status(500).json({ error: 'API key not configured on the server.' });
   }
 
   try {
-    // 1. Receive the entire raw image file into a buffer
-    const imageBuffer = await buffer(req);
-
-    // 2. Create a NEW FormData package on the server
-    const formData = new FormData();
-    formData.append('image_file', imageBuffer, {
-      filename: 'image.jpg', // Provide a filename for the API
-      contentType: req.headers['content-type'], // Pass along the original content type
-    });
-
-    // 3. Send this new, correctly packaged request to ClipDrop
-    const response = await fetch('https://clipdrop-api.co/remove-background/v1', {
+    // 3. Forward the request to the ClipDrop API
+    const clipDropApiUrl = 'https://clipdrop-api.co/remove-background/v1';
+    const response = await fetch(clipDropApiUrl, {
       method: 'POST',
       headers: {
-        'x-api-key': apiKey,
-        // The crucial part: use the headers from the form-data library
-        // This adds the correct "Content-Type: multipart/form-data; boundary=..."
-        ...formData.getHeaders(),
+        // Inject the secret API key for authentication.
+        'x-api-key': clipDropApiKey,
+        // Pass through the original Content-Type header from the client.
+        // As your analysis correctly states, this is ESSENTIAL as it contains the boundary.
+        'Content-Type': req.headers['content-type'],
       },
-      body: formData,
+      // Stream the raw incoming request body directly to ClipDrop.
+      // `req` itself is a readable stream. This is the "dumb pipe".
+      body: req,
+      // This duplex option is required by modern fetch implementations for streaming.
+      duplex: 'half',
     });
 
+    // 4. Handle the response from ClipDrop
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error("ClipDrop API error:", errorText);
-      throw new Error(`API error (${response.status}): ${errorText}`);
+      const errorBody = await response.json().catch(() => ({ error: `ClipDrop API returned status ${response.status}` }));
+      console.error('ClipDrop API error:', errorBody);
+      return res.status(response.status).json(errorBody);
     }
 
-    // 4. Send the successful result back to the user
-    const resultBuffer = await response.arrayBuffer();
-    res.setHeader('Content-Type', 'image/png');
-    res.status(200).send(Buffer.from(resultBuffer));
+    // 5. Stream the successful image response back to the client
+    res.setHeader('Content-Type', response.headers.get('content-type'));
+    // Pipe the binary image data stream from ClipDrop's response to our response.
+    return response.body.pipe(res);
 
   } catch (error) {
-    console.error("Handler error:", error.message);
-    res.status(500).json({ error: 'Failed to process the image.' });
+    console.error('Error in proxy function:', error);
+    res.status(500).json({ error: 'An internal server error occurred.' });
   }
 }
-
-export default allowCors(handler);
