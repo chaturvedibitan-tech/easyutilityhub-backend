@@ -1,5 +1,22 @@
 import FormData from 'form-data';
 
+// Vercel config to disable the automatic body parser.
+// This is the most reliable way to handle raw file streams.
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
+// Helper function to read a request stream into a single buffer.
+async function buffer(readable) {
+  const chunks = [];
+  for await (const chunk of readable) {
+    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
 // CORS and Preflight request handler
 const allowCors = (fn) => async (req, res) => {
   res.setHeader('Access-Control-Allow-Credentials', true);
@@ -14,7 +31,7 @@ const allowCors = (fn) => async (req, res) => {
   return await fn(req, res);
 };
 
-// Main API handler for ClipDrop
+// Main API handler
 async function handler(req, res) {
   const apiKey = process.env.CLIPDROP_API_KEY;
   if (!apiKey) {
@@ -22,17 +39,21 @@ async function handler(req, res) {
   }
 
   try {
-    const imageBuffer = req.body;
+    // Manually buffer the raw image data from the incoming request.
+    // This ensures we capture the file correctly.
+    const imageBuffer = await buffer(req);
 
+    // Create the form data and append the image buffer.
+    // This is the correct way to format the request for ClipDrop.
     const formData = new FormData();
-    formData.append('image_file', imageBuffer, 'background.jpg');
+    formData.append('image_file', imageBuffer, 'image.jpg');
 
     const response = await fetch('https://clipdrop-api.co/remove-background/v1', {
       method: 'POST',
       headers: {
         'x-api-key': apiKey,
       },
-      body: imageBuffer,
+      body: formData, // Pass the entire FormData object as the body.
     });
 
     if (!response.ok) {
