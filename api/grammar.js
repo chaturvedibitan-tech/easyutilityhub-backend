@@ -15,7 +15,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 // Using 'gemini-pro' as it's a stable and widely available model for text generation.
 // This resolves the 404 'model not found' error encountered with 'gemini-1.5-flash-latest'.
-const MODEL_NAME = 'gemini-pro';
+const MODEL_NAME = 'gemini-1.0-pro';
 const API_KEY = process.env.GEMINI_API_KEY;
 
 // Initialize the Gemini client
@@ -158,3 +158,4 @@ export default async function handler(request, response) {
     message: `Method ${request.method} Not Allowed`,
   });
 }
+
