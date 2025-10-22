@@ -1,14 +1,12 @@
-// Rewritten grammar.js based on the user's reference code (ascii-decode)
+// Final Robust grammar.js with detailed error logging and timeout
 
-// CORS Helper Function (Standard practice for Vercel)
+// CORS Helper Function
 const allowCors = (fn) => async (req, res) => {
-  // Use '*' for broad access during development, or restrict to 'https://easyutilityhub.com' for production
-  res.setHeader('Access-Control-Allow-Origin', '*'); 
+  res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type'); 
-
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') {
-    res.status(200).end(); // Handle preflight requests
+    res.status(200).end();
     return;
   }
   return await fn(req, res);
@@ -17,14 +15,15 @@ const allowCors = (fn) => async (req, res) => {
 // Main Handler Function
 async function handler(req, res) {
   // --- Secure API Key Retrieval ---
-  const apiKey = process.env.GEMINI_API_KEY; 
+  const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    console.error('Gemini API key not configured.');
+    console.error('SERVER ERROR: Gemini API key not configured.'); // Detailed server log
+    // Generic error to frontend
     return res.status(500).json({ success: false, message: 'ERROR: API Key is not configured on the server.' });
   }
 
   // --- Input Validation ---
-  const { text } = req.body; 
+  const { text } = req.body;
   if (!text) {
     return res.status(400).json({ success: false, message: 'ERROR: Input text is required.' });
   }
@@ -32,17 +31,15 @@ async function handler(req, res) {
   // --- Gemini API Configuration ---
   const geminiApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
 
-  // --- Carefully Crafted Prompt ---
-  // Tells the AI exactly what to do and how to format the response.
+  // --- Prompt ---
   const prompt = `
     Analyze the following text meticulously for spelling, grammar, and style errors. Provide an overall tone (e.g., Formal, Informal, Confident) and a clarity score (0-100).
     Text: "${text}"
-    Respond ONLY with a single valid JSON object adhering strictly to the provided schema. Do not include any markdown formatting (like \`\`\`json). The indices 'from' and 'to' must be precise character counts from the start of the original text.
+    Respond ONLY with a single valid JSON object adhering strictly to the provided schema. Do not include any markdown formatting (like \`\`\`json). The indices 'from' and 'to' must be precise character counts from the start of the original text. If no errors are found, return an empty "corrections" array.
   `;
 
-  // --- Payload with Structured JSON Response Schema ---
-  // This tells Gemini exactly how to structure its output.
-  const payload = {
+  // --- Payload with Schema ---
+  const payload = { /* ... (Schema remains the same as previous version) ... */
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: {
       responseMimeType: "application/json",
@@ -51,23 +48,14 @@ async function handler(req, res) {
         properties: {
           "analysis": {
             type: "OBJECT",
-            properties: {
-              "tone": { type: "STRING" },
-              "clarityScore": { type: "NUMBER" }
-            },
-             required: ["tone", "clarityScore"]
+            properties: { "tone": { type: "STRING" }, "clarityScore": { type: "NUMBER" } },
+            required: ["tone", "clarityScore"]
           },
           "corrections": {
             type: "ARRAY",
             items: {
               type: "OBJECT",
-              properties: {
-                "from": { type: "NUMBER" },
-                "to": { type: "NUMBER" },
-                "mistake": { type: "STRING" },
-                "correction": { type: "STRING" },
-                "type": { type: "STRING", enum: ["Spelling", "Grammar", "Style"]}
-              },
+              properties: { "from": { type: "NUMBER" }, "to": { type: "NUMBER" }, "mistake": { type: "STRING" }, "correction": { type: "STRING" }, "type": { type: "STRING", enum: ["Spelling", "Grammar", "Style"]} },
               required: ["from", "to", "mistake", "correction", "type"]
             }
           }
@@ -77,44 +65,79 @@ async function handler(req, res) {
     }
   };
 
-  // --- API Call and Response Handling ---
+
+  // --- API Call with Timeout and Detailed Error Handling ---
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 9500); // 9.5 second timeout
+
   try {
+    console.log("SERVER LOG: Sending request to Gemini API...");
     const apiResponse = await fetch(geminiApiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      signal: controller.signal
     });
+    clearTimeout(timeoutId); // Clear timeout on successful fetch start
+    console.log("SERVER LOG: Received response from Gemini API. Status:", apiResponse.status);
+
+    // Check for non-OK HTTP status first
+    if (!apiResponse.ok) {
+        let errorBody = `Gemini API Error: ${apiResponse.status} ${apiResponse.statusText}`;
+        try {
+            const errorJson = await apiResponse.json();
+            console.error("SERVER ERROR: Gemini API returned error JSON:", errorJson);
+            errorBody = errorJson?.error?.message || errorBody; // Use specific message if available
+        } catch (e) {
+             console.error("SERVER ERROR: Gemini API returned non-JSON error response.");
+        }
+        throw new Error(errorBody); // Throw with specific API error
+    }
 
     const result = await apiResponse.json();
 
-    // Check for errors returned by the Gemini API itself
-    if (result.error) {
-        console.error("Gemini API Error:", result.error.message);
-        throw new Error(`Gemini API Error: ${result.error.message}`);
+    // Deeper check for valid response structure (as before)
+    const candidate = result?.candidates?.[0];
+    const part = candidate?.content?.parts?.[0];
+     if (!part?.text) {
+        console.error("SERVER ERROR: Unexpected Gemini response structure. Full response:", JSON.stringify(result, null, 2));
+         let reason = 'Unexpected or empty response structure from AI.';
+         if (candidate?.finishReason === 'SAFETY') reason = 'AI response blocked due to safety settings.';
+         if (candidate?.finishReason === 'RECITATION') reason = 'AI response blocked due to potential recitation.';
+        throw new Error(reason);
     }
-    
-    // Check if the expected candidate structure is present
-     if (!result.candidates || !result.candidates[0] || !result.candidates[0].content || !result.candidates[0].content.parts || !result.candidates[0].content.parts[0].text) {
-        console.error("Unexpected Gemini response structure:", result);
-        throw new Error('Unexpected response structure from AI.');
-    }
 
-    // Extract the JSON text (which should be clean because we requested JSON output)
-    const jsonText = result.candidates[0].content.parts[0].text;
+    const jsonText = part.text;
+    console.log("SERVER LOG: Received JSON text from Gemini:", jsonText.substring(0, 100) + "..."); // Log snippet
 
-    // Parse the guaranteed JSON response
-    const data = JSON.parse(jsonText); 
+    // Parse the JSON (should be clean due to schema request)
+    const data = JSON.parse(jsonText);
+    console.log("SERVER LOG: Successfully parsed JSON data.");
 
-    // Send the successful, structured data back to your website
-    return res.status(200).json({ success: true, ...data }); // Sending the whole parsed object
+    // Send the successful data back
+    return res.status(200).json({ success: true, ...data });
 
   } catch (error) {
-    console.error("Vercel Function Error (Grammar Check):", error.message);
-    // Send a generic error message to the frontend for security
-    return res.status(500).json({ success: false, message: 'ERROR: The AI service encountered an issue.' });
+    clearTimeout(timeoutId); // Ensure timeout cleared on any error
+
+    let errorMessage = 'ERROR: The AI service encountered an issue processing the request.'; // Default frontend message
+    let serverLogMessage = `Vercel Function Error (Grammar Check): ${error.message}`; // Detailed server log
+
+     if (error.name === 'AbortError') {
+        serverLogMessage = "Vercel Function Error: Gemini API request timed out.";
+        errorMessage = 'ERROR: The AI analysis took too long. Please try again.'; // Specific timeout message
+    } else if (error.message.startsWith('Gemini API Error:')) {
+         errorMessage = `ERROR: ${error.message}`; // Forward specific API errors
+    } else if (error instanceof SyntaxError) {
+         serverLogMessage = `Vercel Function Error: Failed to parse JSON response from AI. ${error.message}`;
+         errorMessage = 'ERROR: Received an invalid response format from the AI.';
+    }
+
+    console.error(serverLogMessage); // Log detailed error on the server
+    // Send a potentially more specific, but still safe, error message to the frontend
+    return res.status(500).json({ success: false, message: errorMessage });
   }
 }
 
 // Wrap the handler with CORS
-export default allowCors(handler);
-
+export default allowCors(handler)
