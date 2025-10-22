@@ -13,8 +13,9 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 // --- Configuration ---
 
-// Use 'gemini-1.5-flash-latest' for a balance of speed and capability.
-const MODEL_NAME = 'gemini-1.5-flash-latest';
+// Using 'gemini-pro' as it's a stable and widely available model for text generation.
+// This resolves the 404 'model not found' error encountered with 'gemini-1.5-flash-latest'.
+const MODEL_NAME = 'gemini-pro';
 const API_KEY = process.env.GEMINI_API_KEY;
 
 // Initialize the Gemini client
@@ -95,7 +96,7 @@ export default async function handler(request, response) {
       console.error('Gemini model not initialized.');
       return response.status(500).json({
         success: false,
-        message: 'Server error: AI model not initialized.',
+        message: 'Server error: AI model not initialized. Check GEMINI_API_KEY and Vercel logs.',
       });
     }
 
