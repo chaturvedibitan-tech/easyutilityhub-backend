@@ -1,143 +1,159 @@
-// Final Robust grammar.js with detailed error logging and timeout
+/*
+ * Vercel Serverless Function: api/grammar.js
+ *
+ * This function acts as a secure proxy to the Google Gemini API.
+ * It receives text from the frontend, constructs a precise prompt,
+ * and uses Gemini's JSON mode to get structured correction data.
+ *
+ * Deployment: Place this file in the /api directory of your Vercel project.
+ * Environment Variable: Set 'GEMINI_API_KEY' in your Vercel project settings.
+ */
 
-// CORS Helper Function
-const allowCors = (fn) => async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
-  }
-  return await fn(req, res);
-};
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-// Main Handler Function
-async function handler(req, res) {
-  // --- Secure API Key Retrieval ---
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    console.error('SERVER ERROR: Gemini API key not configured.'); // Detailed server log
-    // Generic error to frontend
-    return res.status(500).json({ success: false, message: 'ERROR: API Key is not configured on the server.' });
-  }
+// --- Configuration ---
 
-  // --- Input Validation ---
-  const { text } = req.body;
-  if (!text) {
-    return res.status(400).json({ success: false, message: 'ERROR: Input text is required.' });
-  }
+// Use 'gemini-1.5-flash-latest' for a balance of speed and capability.
+const MODEL_NAME = 'gemini-1.5-flash-latest';
+const API_KEY = process.env.GEMINI_API_KEY;
 
-  // --- Gemini API Configuration ---
-  const geminiApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
-
-  // --- Prompt ---
-  const prompt = `
-    Analyze the following text meticulously for spelling, grammar, and style errors. Provide an overall tone (e.g., Formal, Informal, Confident) and a clarity score (0-100).
-    Text: "${text}"
-    Respond ONLY with a single valid JSON object adhering strictly to the provided schema. Do not include any markdown formatting (like \`\`\`json). The indices 'from' and 'to' must be precise character counts from the start of the original text. If no errors are found, return an empty "corrections" array.
-  `;
-
-  // --- Payload with Schema ---
-  const payload = { /* ... (Schema remains the same as previous version) ... */
-    contents: [{ parts: [{ text: prompt }] }],
-    generationConfig: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: "OBJECT",
-        properties: {
-          "analysis": {
-            type: "OBJECT",
-            properties: { "tone": { type: "STRING" }, "clarityScore": { type: "NUMBER" } },
-            required: ["tone", "clarityScore"]
-          },
-          "corrections": {
-            type: "ARRAY",
-            items: {
-              type: "OBJECT",
-              properties: { "from": { type: "NUMBER" }, "to": { type: "NUMBER" }, "mistake": { type: "STRING" }, "correction": { type: "STRING" }, "type": { type: "STRING", enum: ["Spelling", "Grammar", "Style"]} },
-              required: ["from", "to", "mistake", "correction", "type"]
-            }
-          }
-        },
-        required: ["analysis", "corrections"]
-      }
-    }
-  };
-
-
-  // --- API Call with Timeout and Detailed Error Handling ---
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 9500); // 9.5 second timeout
-
-  try {
-    console.log("SERVER LOG: Sending request to Gemini API...");
-    const apiResponse = await fetch(geminiApiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-      signal: controller.signal
-    });
-    clearTimeout(timeoutId); // Clear timeout on successful fetch start
-    console.log("SERVER LOG: Received response from Gemini API. Status:", apiResponse.status);
-
-    // Check for non-OK HTTP status first
-    if (!apiResponse.ok) {
-        let errorBody = `Gemini API Error: ${apiResponse.status} ${apiResponse.statusText}`;
-        try {
-            const errorJson = await apiResponse.json();
-            console.error("SERVER ERROR: Gemini API returned error JSON:", errorJson);
-            errorBody = errorJson?.error?.message || errorBody; // Use specific message if available
-        } catch (e) {
-             console.error("SERVER ERROR: Gemini API returned non-JSON error response.");
-        }
-        throw new Error(errorBody); // Throw with specific API error
-    }
-
-    const result = await apiResponse.json();
-
-    // Deeper check for valid response structure (as before)
-    const candidate = result?.candidates?.[0];
-    const part = candidate?.content?.parts?.[0];
-     if (!part?.text) {
-        console.error("SERVER ERROR: Unexpected Gemini response structure. Full response:", JSON.stringify(result, null, 2));
-         let reason = 'Unexpected or empty response structure from AI.';
-         if (candidate?.finishReason === 'SAFETY') reason = 'AI response blocked due to safety settings.';
-         if (candidate?.finishReason === 'RECITATION') reason = 'AI response blocked due to potential recitation.';
-        throw new Error(reason);
-    }
-
-    const jsonText = part.text;
-    console.log("SERVER LOG: Received JSON text from Gemini:", jsonText.substring(0, 100) + "..."); // Log snippet
-
-    // Parse the JSON (should be clean due to schema request)
-    const data = JSON.parse(jsonText);
-    console.log("SERVER LOG: Successfully parsed JSON data.");
-
-    // Send the successful data back
-    return res.status(200).json({ success: true, ...data });
-
-  } catch (error) {
-    clearTimeout(timeoutId); // Ensure timeout cleared on any error
-
-    let errorMessage = 'ERROR: The AI service encountered an issue processing the request.'; // Default frontend message
-    let serverLogMessage = `Vercel Function Error (Grammar Check): ${error.message}`; // Detailed server log
-
-     if (error.name === 'AbortError') {
-        serverLogMessage = "Vercel Function Error: Gemini API request timed out.";
-        errorMessage = 'ERROR: The AI analysis took too long. Please try again.'; // Specific timeout message
-    } else if (error.message.startsWith('Gemini API Error:')) {
-         errorMessage = `ERROR: ${error.message}`; // Forward specific API errors
-    } else if (error instanceof SyntaxError) {
-         serverLogMessage = `Vercel Function Error: Failed to parse JSON response from AI. ${error.message}`;
-         errorMessage = 'ERROR: Received an invalid response format from the AI.';
-    }
-
-    console.error(serverLogMessage); // Log detailed error on the server
-    // Send a potentially more specific, but still safe, error message to the frontend
-    return res.status(500).json({ success: false, message: errorMessage });
-  }
+// Initialize the Gemini client
+let genAI;
+let model;
+try {
+  genAI = new GoogleGenerativeAI(API_KEY);
+  model = genAI.getGenerativeModel({
+    model: MODEL_NAME,
+    // System instruction to guide the AI's behavior
+    systemInstruction: `You are an expert proofreader and writing coach.
+Analyze the user's text for errors in spelling, grammar, and style (e.g., wordiness, passive voice, awkward phrasing).
+You must provide corrections in the exact JSON format specified.
+Character indices (from/to) MUST be precise and based on the original plain text.
+'from' is the 0-based index of the first character of the error.
+'to' is the 0-based index of the character *after* the last character of the error.
+Also provide an overall 'tone' (e.g., "Formal", "Casual", "Assertive") and a 'clarityScore' (0-100).
+If no errors are found, return an empty 'corrections' array.`,
+  });
+} catch (e) {
+  console.error('Failed to initialize GoogleGenerativeAI. Is GEMINI_API_KEY set?', e.message);
 }
 
-// Wrap the handler with CORS
-export default allowCors(handler)
+// --- AI JSON Schema ---
+
+// This schema forces Gemini to return JSON in our required format.
+const responseSchema = {
+  type: 'OBJECT',
+  properties: {
+    success: { type: 'BOOLEAN' },
+    analysis: {
+      type: 'OBJECT',
+      properties: {
+        tone: { type: 'STRING' },
+        clarityScore: { type: 'NUMBER' },
+      },
+      required: ['tone', 'clarityScore'],
+    },
+    corrections: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          from: { type: 'NUMBER' },
+          to: { type: 'NUMBER' },
+          mistake: { type: 'STRING' },
+          correction: { type: 'STRING' },
+          type: {
+            type: 'STRING',
+            enum: ['Spelling', 'Grammar', 'Style'],
+          },
+        },
+        required: ['from', 'to', 'mistake', 'correction', 'type'],
+      },
+    },
+  },
+  required: ['success', 'analysis', 'corrections'],
+};
+
+// --- Vercel Handler Function ---
+
+export default async function handler(request, response) {
+  // --- CORS Headers ---
+  // Allow requests from any origin. For production, you might restrict this
+  // to your website's domain (e.g., 'https://easyutilityhub.com').
+  response.setHeader('Access-Control-Allow-Origin', '*');
+  response.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  response.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  // Handle preflight OPTIONS requests
+  if (request.method === 'OPTIONS') {
+    return response.status(200).end();
+  }
+
+  // --- POST Request Logic ---
+  if (request.method === 'POST') {
+    if (!model) {
+      console.error('Gemini model not initialized.');
+      return response.status(500).json({
+        success: false,
+        message: 'Server error: AI model not initialized.',
+      });
+    }
+
+    try {
+      const { text } = request.body;
+
+      if (typeof text !== 'string') {
+        return response.status(400).json({
+          success: false,
+          message: 'Invalid request: "text" field is missing or not a string.',
+        });
+      }
+
+      // If text is empty, return success with no corrections
+      if (text.trim() === '') {
+        return response.status(200).json({
+          success: true,
+          analysis: { tone: 'N/A', clarityScore: 100 },
+          corrections: [],
+        });
+      }
+
+      // --- Call Gemini API ---
+      const chat = model.startChat({
+        generationConfig: {
+          responseMimeType: 'application/json',
+          responseSchema: responseSchema,
+          temperature: 0.2, // Lower temperature for more deterministic corrections
+        },
+      });
+
+      const prompt = `Please analyze the following text:\n\n${text}`;
+      const result = await chat.sendMessage(prompt);
+      const aiResponse = result.response;
+
+      // The response.text() will be a stringified JSON object
+      const jsonData = JSON.parse(aiResponse.text());
+      
+      // Send the structured JSON data back to the frontend
+      return response.status(200).json(jsonData);
+
+    } catch (error) {
+      console.error('Error calling Gemini API:', error);
+      let errorMessage = 'An error occurred while processing your request.';
+      if (error.message) {
+        errorMessage = error.message;
+      }
+      return response.status(500).json({
+        success: false,
+        message: errorMessage,
+      });
+    }
+  }
+
+  // --- Handle other methods ---
+  response.setHeader('Allow', ['POST', 'OPTIONS']);
+  return response.status(405).json({
+    success: false,
+    message: `Method ${request.method} Not Allowed`,
+  });
+}
