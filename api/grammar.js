@@ -1,69 +1,120 @@
-// This new file will live alongside 'api/remove-background.js' in your Vercel project.
-// It uses our proven proxy pattern.
+// Rewritten grammar.js based on the user's reference code (ascii-decode)
 
-// The RapidAPI requires a specific way to make requests, which we handle here.
+// CORS Helper Function (Standard practice for Vercel)
 const allowCors = (fn) => async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  // Use '*' for broad access during development, or restrict to 'https://easyutilityhub.com' for production
+  res.setHeader('Access-Control-Allow-Origin', '*'); 
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-rapidapi-key, x-rapidapi-host');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type'); 
+
   if (req.method === 'OPTIONS') {
-    res.status(200).end();
+    res.status(200).end(); // Handle preflight requests
     return;
   }
   return await fn(req, res);
 };
 
+// Main Handler Function
 async function handler(req, res) {
-  // 1. Securely get the API Key and Host from Vercel Environment Variables
-  const apiKey = process.env.RAPIDAPI_KEY;
-  const apiHost = process.env.RAPIDAPI_HOST;
-
-  if (!apiKey || !apiHost) {
-    console.error('RapidAPI environment variables not set.');
-    return res.status(500).json({ error: 'API is not configured on the server.' });
+  // --- Secure API Key Retrieval ---
+  const apiKey = process.env.GEMINI_API_KEY; 
+  if (!apiKey) {
+    console.error('Gemini API key not configured.');
+    return res.status(500).json({ success: false, message: 'ERROR: API Key is not configured on the server.' });
   }
-  
-  // 2. Get the text from the user's request
-  const { text } = req.body;
+
+  // --- Input Validation ---
+  const { text } = req.body; 
   if (!text) {
-    return res.status(400).json({ error: 'No text provided.' });
+    return res.status(400).json({ success: false, message: 'ERROR: Input text is required.' });
   }
 
-  // 3. Call the external Grammar API (Ginger)
-  const apiUrl = `https://${apiHost}/v1/check`;
-  const options = {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'X-RapidAPI-Key': apiKey,
-      'X-RapidAPI-Host': apiHost
-    },
-    body: JSON.stringify({ text: text })
+  // --- Gemini API Configuration ---
+  const geminiApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+
+  // --- Carefully Crafted Prompt ---
+  // Tells the AI exactly what to do and how to format the response.
+  const prompt = `
+    Analyze the following text meticulously for spelling, grammar, and style errors. Provide an overall tone (e.g., Formal, Informal, Confident) and a clarity score (0-100).
+    Text: "${text}"
+    Respond ONLY with a single valid JSON object adhering strictly to the provided schema. Do not include any markdown formatting (like \`\`\`json). The indices 'from' and 'to' must be precise character counts from the start of the original text.
+  `;
+
+  // --- Payload with Structured JSON Response Schema ---
+  // This tells Gemini exactly how to structure its output.
+  const payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "OBJECT",
+        properties: {
+          "analysis": {
+            type: "OBJECT",
+            properties: {
+              "tone": { type: "STRING" },
+              "clarityScore": { type: "NUMBER" }
+            },
+             required: ["tone", "clarityScore"]
+          },
+          "corrections": {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: {
+                "from": { type: "NUMBER" },
+                "to": { type: "NUMBER" },
+                "mistake": { type: "STRING" },
+                "correction": { type: "STRING" },
+                "type": { type: "STRING", enum: ["Spelling", "Grammar", "Style"]}
+              },
+              required: ["from", "to", "mistake", "correction", "type"]
+            }
+          }
+        },
+        required: ["analysis", "corrections"]
+      }
+    }
   };
 
+  // --- API Call and Response Handling ---
   try {
-    const apiResponse = await fetch(apiUrl, options);
-    const data = await apiResponse.json();
+    const apiResponse = await fetch(geminiApiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
 
-    if (!apiResponse.ok) {
-        throw new Error(data.message || 'An error occurred with the grammar API.');
+    const result = await apiResponse.json();
+
+    // Check for errors returned by the Gemini API itself
+    if (result.error) {
+        console.error("Gemini API Error:", result.error.message);
+        throw new Error(`Gemini API Error: ${result.error.message}`);
     }
     
-    // 4. Reformat the API response to match what our frontend expects
-    const corrections = data.corrections.map(item => ({
-        mistake: item.mistake,
-        correction: item.correct,
-        type: item.type,
-    }));
+    // Check if the expected candidate structure is present
+     if (!result.candidates || !result.candidates[0] || !result.candidates[0].content || !result.candidates[0].content.parts || !result.candidates[0].content.parts[0].text) {
+        console.error("Unexpected Gemini response structure:", result);
+        throw new Error('Unexpected response structure from AI.');
+    }
 
-    // 5. Send the formatted corrections back to the user
-    res.status(200).json({ corrections });
+    // Extract the JSON text (which should be clean because we requested JSON output)
+    const jsonText = result.candidates[0].content.parts[0].text;
+
+    // Parse the guaranteed JSON response
+    const data = JSON.parse(jsonText); 
+
+    // Send the successful, structured data back to your website
+    return res.status(200).json({ success: true, ...data }); // Sending the whole parsed object
 
   } catch (error) {
-    console.error('Error in grammar function:', error);
-    res.status(500).json({ error: 'An internal server error occurred.' });
+    console.error("Vercel Function Error (Grammar Check):", error.message);
+    // Send a generic error message to the frontend for security
+    return res.status(500).json({ success: false, message: 'ERROR: The AI service encountered an issue.' });
   }
 }
 
+// Wrap the handler with CORS
 export default allowCors(handler);
 
