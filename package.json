@@ -8,6 +8,6 @@
   "license": "ISC",
   "dependencies": {
     "form-data": "^4.0.0",
-    "@google/generative-ai": "^0.11.0"  // <--- ADD THIS LINE (with a comma above it)
+    "@google/generative-ai": "^0.11.0"
   }
 }
