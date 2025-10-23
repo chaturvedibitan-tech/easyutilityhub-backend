@@ -1,4 +1,5 @@
-// Plagiarism Checker Backend: /api/plagiarism.js
+// Plagiarism Backend: /api/plagiarism.js
+// FIX: Updated prompt to avoid "RECITATION" error.
 
 // Helper function for delays
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -31,36 +32,46 @@ async function handler(req, res) {
   }
 
   // --- Gemini API Configuration ---
-  // Using the same model as your grammar checker for consistency
   const geminiApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
 
-  // --- Prompt ---
+  // --- ** NEW, More Explicit Prompt ** ---
   const prompt = `
-    You are a plagiarism checker. Analyze the following text.
-    Use your Google Search tool to find online sources that substantially match this text.
+    You are a professional plagiarism detection service.
+    Your task is to analyze the following user-provided text using your Google Search tool to find matching sources.
+    
+    User Text:
+    "${text}"
 
-    Text: "${text}"
+    Your Instructions:
+    1.  Search Google for snippets from the User Text.
+    2.  Based on the search results, determine a "plagiarismPercentage" (number, 0-100) and a "uniquePercentage" (number, 0-100).
+    3.  Compile a list of "matchedSources".
+    4.  For each source in "matchedSources", provide its "url", "title", and a "snippet".
+    5.  The "snippet" MUST be a *short quote* from the user's text that matches the source, NOT a quote from the source itself.
+    
+    IMPORTANT: Your final response MUST be a single, valid JSON object. Do NOT include markdown \`\`\`json.
+    Do NOT recite or output the full User Text in your response. Your response must be an *analysis* in the specified JSON format.
 
-    After searching, provide:
-    1.  A "plagiarismPercentage" (number from 0-100) representing how much of the text is found in online sources.
-    2.  A "uniquePercentage" (number from 0-100) for the remaining text.
-    3.  A "matchedSources" array. For each source found, include its "title", "url", and a "snippet" of the matching text.
+    JSON Schema:
+    {
+      "plagiarismPercentage": number,
+      "uniquePercentage": number,
+      "matchedSources": [
+        {
+          "url": "string",
+          "title": "string",
+          "snippet": "string"
+        }
+      ]
+    }
 
-    If no plagiarism is found, return 0 for plagiarismPercentage, 100 for uniquePercentage, and an empty matchedSources array.
-    Respond ONLY with a single valid JSON object adhering strictly to the schema. Do not include any markdown.
+    If no matches are found, return 0 for plagiarismPercentage, 100 for uniquePercentage, and an empty matchedSources array.
   `;
 
-  // --- Payload with Schema ---
+  // --- Payload ---
   const payload = {
     contents: [{ parts: [{ text: prompt }] }],
-    // --- THIS IS THE KEY ---
-    // Enable Google Search grounding
     tools: [{ "google_search": {} }],
-    // ------------------------
-    //
-    // --- FIX: We CANNOT use responseMimeType: "application/json" with tools.
-    // We must rely on the prompt to ask for JSON text.
-    // The generationConfig block has been removed.
   };
 
   // --- Retry Configuration ---
@@ -89,25 +100,29 @@ async function handler(req, res) {
           if (!part?.text) {
             console.error("SERVER ERROR (Plagiarism): Unexpected Gemini response structure.", JSON.stringify(result, null, 2));
             let reason = 'Unexpected or empty response structure from AI.';
-            if (candidate?.finishReason === 'SAFETY') reason = 'AI response blocked due to safety settings.';
-            if (candidate?.finishReason === 'RECITATION') reason = 'AI response blocked due to potential recitation.';
+            // ** This logic correctly catches the RECITATION error **
+            if (candidate?.finishReason === 'RECITATION') {
+                reason = 'AI response blocked due to potential recitation.';
+            } else if (candidate?.finishReason === 'SAFETY') {
+                reason = 'AI response blocked due to safety settings.';
+            }
             throw new Error(reason);
           }
 
-          let jsonText = part.text;
-          console.log("SERVER LOG (Plagiarism): Received raw text from Gemini:", jsonText);
+          let jsonText = part.text.trim();
+          console.log("SERVER LOG (Plagiarism): Received raw text from Gemini.");
 
-          // --- FIX: Clean markdown backticks from the response ---
+          // Clean markdown backticks
           if (jsonText.startsWith("```json")) {
             jsonText = jsonText.substring(7, jsonText.length - 3).trim();
           } else if (jsonText.startsWith("```")) {
             jsonText = jsonText.substring(3, jsonText.length - 3).trim();
           }
-          // --------------------------------------------------
           
+          console.log("SERVER LOG (Plagiarism): Cleaned text. Attempting to parse...");
           const data = JSON.parse(jsonText);
           console.log("SERVER LOG (Plagiarism): Successfully parsed JSON data.");
-          
+
           return res.status(200).json({ success: true, ...data });
         }
 
@@ -129,26 +144,26 @@ async function handler(req, res) {
         } catch (e) {
           console.error("SERVER ERROR (Plagiarism): Gemini API returned non-JSON error response.");
         }
+        // Do not retry on 400-level errors
         throw new Error(errorBody);
 
       } catch (fetchError) {
         console.error(`SERVER LOG (Plagiarism Attempt ${attempt + 1}):`, fetchError.message);
+        const errorString = (fetchError.message || "").toLowerCase();
+        
+        // ** FIX: Do NOT retry on RECITATION or other permanent errors **
+        if (errorString.includes('recitation') || errorString.includes('safety') || errorString.includes('invalid') || errorString.includes('gemini api error')) {
+             throw fetchError; // Give up immediately
+        }
+
         if (attempt === MAX_RETRIES) {
-          throw fetchError; // Give up
+          throw fetchError; // Give up on max retries
         }
         
-        // --- FIX: Only retry on genuine network errors (like "Failed to fetch"),
-        // not on 400-level API errors (like "Tool use unsupported...")
-        const errorString = fetchError.message || "";
-        // Check for specific network error messages (these vary by environment)
-        if (errorString.includes('Failed to fetch') || errorString.includes('network error')) {
-            const delay = BASE_DELAY * Math.pow(2, attempt);
-            console.log(`SERVER LOG (Plagiarism): Network error. Retrying in ${delay}ms...`);
-            await sleep(delay);
-        } else {
-            // It's a 400-level error or a JSON parse error, throw to exit loop.
-            throw fetchError;
-        }
+        // Retry on network errors or 503s
+        const delay = BASE_DELAY * Math.pow(2, attempt);
+        console.log(`SERVER LOG (Plagiarism): Retrying in ${delay}ms...`);
+        await sleep(delay);
       }
     }
 
@@ -157,16 +172,14 @@ async function handler(req, res) {
     let serverLogMessage = `Vercel Function Error (Plagiarism Check): ${error.message}`;
 
     if (error.name === 'AbortError') {
-        serverLogMessage = "Vercel Function Error (Plagiarism): Request timed out.";
-        errorMessage = 'ERROR: The plagiarism analysis took too long. Please try again.';
+        serverLogMessage = "Vercel Function Error (Paraphrase): Request timed out.";
+        errorMessage = 'ERROR: The analysis took too long. Please try again.';
     } else if (error.message.includes('overloaded')) {
         errorMessage = 'ERROR: The model is overloaded. Please try again later.';
-    } else if (error.message.includes('Gemini API Error:') || error.message.includes('Tool use with')) {
-        // Catch the specific error
+    } else if (error.message.includes('recitation')) {
+         errorMessage = 'ERROR: AI analysis was blocked. The text may be too similar to a web source.';
+    } else if (error.message.includes('Gemini API Error:')) {
         errorMessage = `ERROR: ${error.message}`;
-    } else if (error instanceof SyntaxError) {
-        serverLogMessage = `VLC Function Error (Plagiarism): Failed to parse JSON response from AI. ${error.message}`;
-        errorMessage = 'ERROR: Received an invalid response format from the AI.';
     }
 
     console.error(serverLogMessage);
