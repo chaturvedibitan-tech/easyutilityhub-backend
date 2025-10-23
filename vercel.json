@@ -1,7 +1,7 @@
 {
-    "functions": {
-        "api/grammar.js": {
-            "maxDuration": 15
-        }
+  "functions": {
+    "api/grammar": {
+      "maxDuration": 60 
     }
+  }
 }
