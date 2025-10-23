@@ -5,6 +5,10 @@
     },
     "api/plagiarism.js": {
       "maxDuration": 60
+    },
+    "api/paraphrase.js": {
+      "maxDuration": 60
     }
   }
 }
+
