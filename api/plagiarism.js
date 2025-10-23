@@ -57,29 +57,10 @@ async function handler(req, res) {
     // Enable Google Search grounding
     tools: [{ "google_search": {} }],
     // ------------------------
-    generationConfig: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: "OBJECT",
-        properties: {
-          "plagiarismPercentage": { type: "NUMBER" },
-          "uniquePercentage": { type: "NUMBER" },
-          "matchedSources": {
-            type: "ARRAY",
-            items: {
-              type: "OBJECT",
-              properties: {
-                "title": { type: "STRING" },
-                "url": { type: "STRING" },
-                "snippet": { type: "STRING" }
-              },
-              required: ["title", "url", "snippet"]
-            }
-          }
-        },
-        required: ["plagiarismPercentage", "uniquePercentage", "matchedSources"]
-      }
-    }
+    //
+    // --- FIX: We CANNOT use responseMimeType: "application/json" with tools.
+    // We must rely on the prompt to ask for JSON text.
+    // The generationConfig block has been removed.
   };
 
   // --- Retry Configuration ---
@@ -144,12 +125,20 @@ async function handler(req, res) {
       } catch (fetchError) {
         console.error(`SERVER ERROR (Plagiarism Attempt ${attempt + 1}):`, fetchError.message);
         if (attempt === MAX_RETRIES) {
-          throw fetchError;
+          throw fetchError; // Give up
         }
-        if (!String(fetchError.message).includes('503') && !String(fetchError.message).includes('overloaded')) {
-          const delay = BASE_DELAY * Math.pow(2, attempt);
-          console.log(`SERVER LOG (Plagiarism): Network error. Retrying in ${delay}ms...`);
-          await sleep(delay);
+        
+        // --- FIX: Only retry on genuine network errors (like "Failed to fetch"),
+        // not on 400-level API errors (like "Tool use unsupported...")
+        const errorString = fetchError.message || "";
+        // Check for specific network error messages (these vary by environment)
+        if (errorString.includes('Failed to fetch') || errorString.includes('network error')) {
+            const delay = BASE_DELAY * Math.pow(2, attempt);
+            console.log(`SERVER LOG (Plagiarism): Network error. Retrying in ${delay}ms...`);
+            await sleep(delay);
+        } else {
+            // It's a 400-level error, throw to exit loop.
+            throw fetchError;
         }
       }
     }
@@ -163,7 +152,8 @@ async function handler(req, res) {
         errorMessage = 'ERROR: The plagiarism analysis took too long. Please try again.';
     } else if (error.message.includes('overloaded')) {
         errorMessage = 'ERROR: The model is overloaded. Please try again later.';
-    } else if (error.message.includes('Gemini API Error:')) {
+    } else if (error.message.includes('Gemini API Error:') || error.message.includes('Tool use with')) {
+        // Catch the specific error
         errorMessage = `ERROR: ${error.message}`;
     } else if (error instanceof SyntaxError) {
         serverLogMessage = `VLC Function Error (Plagiarism): Failed to parse JSON response from AI. ${error.message}`;
@@ -177,3 +167,4 @@ async function handler(req, res) {
 
 // Wrap the handler with CORS
 export default allowCors(handler);
+
