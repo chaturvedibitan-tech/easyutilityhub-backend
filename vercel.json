@@ -11,8 +11,12 @@
     },
     "api/detector.js": {
       "maxDuration": 60
+    },
+    "api/humanizer.js": {
+      "maxDuration": 60
     }
   }
 }
+
 
 
