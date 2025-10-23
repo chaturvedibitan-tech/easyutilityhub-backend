@@ -1,4 +1,7 @@
-// Final Robust grammar.js with detailed error logging and timeout
+// Final Robust grammar.js with Exponential Backoff
+
+// Helper function for delays
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // CORS Helper Function
 const allowCors = (fn) => async (req, res) => {
@@ -18,7 +21,6 @@ async function handler(req, res) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     console.error('SERVER ERROR: Gemini API key not configured.'); // Detailed server log
-    // Generic error to frontend
     return res.status(500).json({ success: false, message: 'ERROR: API Key is not configured on the server.' });
   }
 
@@ -39,7 +41,7 @@ async function handler(req, res) {
   `;
 
   // --- Payload with Schema ---
-  const payload = { /* ... (Schema remains the same as previous version) ... */
+  const payload = {
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: {
       responseMimeType: "application/json",
@@ -65,79 +67,111 @@ async function handler(req, res) {
     }
   };
 
+  // --- NEW: Retry Configuration ---
+  const MAX_RETRIES = 3; // Total 4 attempts (1 initial + 3 retries)
+  const BASE_DELAY = 1000; // 1 second
 
-  // --- API Call with Timeout and Detailed Error Handling ---
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 9500); // 9.5 second timeout
-
+  // --- API Call with Timeout and Retry Logic ---
   try {
-    console.log("SERVER LOG: Sending request to Gemini API...");
-    const apiResponse = await fetch(geminiApiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-      signal: controller.signal
-    });
-    clearTimeout(timeoutId); // Clear timeout on successful fetch start
-    console.log("SERVER LOG: Received response from Gemini API. Status:", apiResponse.status);
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      console.log(`SERVER LOG: Gemini API request attempt ${attempt + 1}/${MAX_RETRIES + 1}...`);
+      
+      try {
+        const apiResponse = await fetch(geminiApiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          // We removed the 9.5s AbortController to let Vercel's (longer) timeout rule.
+          // You MUST increase the function's maxDuration in vercel.json
+        });
+        
+        console.log(`SERVER LOG: Attempt ${attempt + 1} status:`, apiResponse.status);
 
-    // Check for non-OK HTTP status first
-    if (!apiResponse.ok) {
+        // --- SUCCESS ---
+        if (apiResponse.ok) {
+          const result = await apiResponse.json();
+          const candidate = result?.candidates?.[0];
+          const part = candidate?.content?.parts?.[0];
+          
+          if (!part?.text) {
+            console.error("SERVER ERROR: Unexpected Gemini response structure.", JSON.stringify(result, null, 2));
+            let reason = 'Unexpected or empty response structure from AI.';
+            if (candidate?.finishReason === 'SAFETY') reason = 'AI response blocked due to safety settings.';
+            if (candidate?.finishReason === 'RECITATION') reason = 'AI response blocked due to potential recitation.';
+            throw new Error(reason); // This will be caught by the outer catch
+          }
+
+          const jsonText = part.text;
+          console.log("SERVER LOG: Received JSON text from Gemini:", jsonText.substring(0, 100) + "...");
+          const data = JSON.parse(jsonText);
+          console.log("SERVER LOG: Successfully parsed JSON data.");
+          
+          // --- EXIT on SUCCESS ---
+          return res.status(200).json({ success: true, ...data });
+        }
+
+        // --- RETRYABLE ERROR (503 Overloaded) ---
+        if (apiResponse.status === 503) {
+          if (attempt === MAX_RETRIES) {
+            throw new Error('The model is overloaded. Please try again later. (Max retries reached)');
+          }
+          const delay = BASE_DELAY * Math.pow(2, attempt);
+          console.log(`SERVER LOG: Model overloaded (503). Retrying in ${delay}ms...`);
+          await sleep(delay);
+          continue; // Go to the next loop iteration
+        }
+
+        // --- NON-RETRYABLE ERROR (e.g., 400, 401, 500) ---
         let errorBody = `Gemini API Error: ${apiResponse.status} ${apiResponse.statusText}`;
         try {
-            const errorJson = await apiResponse.json();
-            console.error("SERVER ERROR: Gemini API returned error JSON:", errorJson);
-            errorBody = errorJson?.error?.message || errorBody; // Use specific message if available
+          const errorJson = await apiResponse.json();
+          console.error("SERVER ERROR: Gemini API returned non-retryable error JSON:", errorJson);
+          errorBody = errorJson?.error?.message || errorBody;
         } catch (e) {
-             console.error("SERVER ERROR: Gemini API returned non-JSON error response.");
+          console.error("SERVER ERROR: Gemini API returned non-JSON error response.");
         }
-        throw new Error(errorBody); // Throw with specific API error
-    }
+        throw new Error(errorBody); // Break the loop and go to outer catch
 
-    const result = await apiResponse.json();
+      } catch (fetchError) {
+        // This catches network errors OR errors we threw from non-retryable/last-attempt
+        console.error(`SERVER ERROR (Attempt ${attempt + 1}):`, fetchError.message);
+        
+        if (attempt === MAX_RETRIES) {
+          throw fetchError; // Give up and go to main catch block
+        }
 
-    // Deeper check for valid response structure (as before)
-    const candidate = result?.candidates?.[0];
-    const part = candidate?.content?.parts?.[0];
-     if (!part?.text) {
-        console.error("SERVER ERROR: Unexpected Gemini response structure. Full response:", JSON.stringify(result, null, 2));
-         let reason = 'Unexpected or empty response structure from AI.';
-         if (candidate?.finishReason === 'SAFETY') reason = 'AI response blocked due to safety settings.';
-         if (candidate?.finishReason === 'RECITATION') reason = 'AI response blocked due to potential recitation.';
-        throw new Error(reason);
-    }
-
-    const jsonText = part.text;
-    console.log("SERVER LOG: Received JSON text from Gemini:", jsonText.substring(0, 100) + "..."); // Log snippet
-
-    // Parse the JSON (should be clean due to schema request)
-    const data = JSON.parse(jsonText);
-    console.log("SERVER LOG: Successfully parsed JSON data.");
-
-    // Send the successful data back
-    return res.status(200).json({ success: true, ...data });
+        // If it's NOT a 503, but a network error, let's retry
+        if (!String(fetchError.message).includes('503') && !String(fetchError.message).includes('overloaded')) {
+          const delay = BASE_DELAY * Math.pow(2, attempt);
+          console.log(`SERVER LOG: Network error. Retrying in ${delay}ms...`);
+          await sleep(delay);
+        }
+        // If it was a 503, the `continue` was already called.
+        // If it was a non-retryable, it's thrown and caught by the main catch block.
+      }
+    } // End of for loop
 
   } catch (error) {
-    clearTimeout(timeoutId); // Ensure timeout cleared on any error
+    // This is the main catch block
+    let errorMessage = 'ERROR: The AI service encountered an issue processing the request.'; // Default
+    let serverLogMessage = `Vercel Function Error (Grammar Check): ${error.message}`;
 
-    let errorMessage = 'ERROR: The AI service encountered an issue processing the request.'; // Default frontend message
-    let serverLogMessage = `Vercel Function Error (Grammar Check): ${error.message}`; // Detailed server log
-
-     if (error.name === 'AbortError') {
-        serverLogMessage = "Vercel Function Error: Gemini API request timed out.";
-        errorMessage = 'ERROR: The AI analysis took too long. Please try again.'; // Specific timeout message
-    } else if (error.message.startsWith('Gemini API Error:')) {
-         errorMessage = `ERROR: ${error.message}`; // Forward specific API errors
+    if (error.name === 'AbortError') { // This may still happen if Vercel's timeout is hit
+        serverLogMessage = "Vercel Function Error: Request timed out.";
+        errorMessage = 'ERROR: The AI analysis took too long. Please try again.';
+    } else if (error.message.includes('overloaded')) {
+        errorMessage = 'ERROR: The model is overloaded. Please try again later.';
+    } else if (error.message.includes('Gemini API Error:')) {
+        errorMessage = `ERROR: ${error.message}`;
     } else if (error instanceof SyntaxError) {
-         serverLogMessage = `Vercel Function Error: Failed to parse JSON response from AI. ${error.message}`;
-         errorMessage = 'ERROR: Received an invalid response format from the AI.';
+        serverLogMessage = `Vercel Function Error: Failed to parse JSON response from AI. ${error.message}`;
+        errorMessage = 'ERROR: Received an invalid response format from the AI.';
     }
 
-    console.error(serverLogMessage); // Log detailed error on the server
-    // Send a potentially more specific, but still safe, error message to the frontend
+    console.error(serverLogMessage); // Log detailed error
     return res.status(500).json({ success: false, message: errorMessage });
   }
 }
 
 // Wrap the handler with CORS
-export default allowCors(handler)
+export default allowCors(handler);
