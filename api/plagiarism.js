@@ -94,8 +94,17 @@ async function handler(req, res) {
             throw new Error(reason);
           }
 
-          const jsonText = part.text;
-          console.log("SERVER LOG (Plagiarism): Received JSON text from Gemini.");
+          let jsonText = part.text;
+          console.log("SERVER LOG (Plagiarism): Received raw text from Gemini:", jsonText);
+
+          // --- FIX: Clean markdown backticks from the response ---
+          if (jsonText.startsWith("```json")) {
+            jsonText = jsonText.substring(7, jsonText.length - 3).trim();
+          } else if (jsonText.startsWith("```")) {
+            jsonText = jsonText.substring(3, jsonText.length - 3).trim();
+          }
+          // --------------------------------------------------
+          
           const data = JSON.parse(jsonText);
           console.log("SERVER LOG (Plagiarism): Successfully parsed JSON data.");
           
@@ -123,7 +132,7 @@ async function handler(req, res) {
         throw new Error(errorBody);
 
       } catch (fetchError) {
-        console.error(`SERVER ERROR (Plagiarism Attempt ${attempt + 1}):`, fetchError.message);
+        console.error(`SERVER LOG (Plagiarism Attempt ${attempt + 1}):`, fetchError.message);
         if (attempt === MAX_RETRIES) {
           throw fetchError; // Give up
         }
@@ -137,7 +146,7 @@ async function handler(req, res) {
             console.log(`SERVER LOG (Plagiarism): Network error. Retrying in ${delay}ms...`);
             await sleep(delay);
         } else {
-            // It's a 400-level error, throw to exit loop.
+            // It's a 400-level error or a JSON parse error, throw to exit loop.
             throw fetchError;
         }
       }
