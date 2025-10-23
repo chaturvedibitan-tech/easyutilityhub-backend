@@ -8,7 +8,11 @@
     },
     "api/paraphrase.js": {
       "maxDuration": 60
+    },
+    "api/detector.js": {
+      "maxDuration": 60
     }
   }
 }
+
 
