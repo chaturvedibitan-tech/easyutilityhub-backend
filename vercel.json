@@ -1,22 +1,23 @@
 {
   "functions": {
     "api/grammar.js": {
-      "maxDuration": 60
+      "maxDuration": 300
     },
     "api/plagiarism.js": {
-      "maxDuration": 60
+      "maxDuration": 300
     },
     "api/paraphrase.js": {
-      "maxDuration": 60
+      "maxDuration": 300
     },
     "api/detector.js": {
-      "maxDuration": 60
+      "maxDuration": 300
     },
     "api/humanizer.js": {
-      "maxDuration": 60
+      "maxDuration": 300
     }
   }
 }
+
 
 
 
