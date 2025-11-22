@@ -21,7 +21,7 @@ export default async function handler(request, response) {
   }
 
   // Use the correct model name that works for your key
-  const googleApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+  const googleApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
 
   // Re-create the prompt and payload on the server side
   const prompt = `Generate a single, moderately difficult, family-friendly English word related to the category '${category}', between 6 and 10 letters long. Also provide a one-sentence clever hint for that word.`;
@@ -72,3 +72,4 @@ export default async function handler(request, response) {
     return response.status(500).json({ success: false, message: 'ERROR: The AI service returned an error.' });
   }
 }
+
