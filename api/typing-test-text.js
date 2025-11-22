@@ -21,7 +21,7 @@ export default async function handler(request, response) {
   }
 
   // Use the correct model name that works for your key
-  const googleApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+  const googleApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
 
   // Re-create the prompt on the server side
   const prompt = `Generate one single, family-friendly paragraph of about 40-50 words for a typing speed test, related to the category '${category}'. The text should be interesting, contain a mix of common English words, and use standard punctuation. Only return the generated text, with no extra commentary.`;
@@ -53,4 +53,5 @@ export default async function handler(request, response) {
     console.error("Vercel Function Error (Typing Test):", error.message);
     return response.status(500).json({ success: false, message: 'ERROR: The AI service returned an error.' });
   }
+
 }
