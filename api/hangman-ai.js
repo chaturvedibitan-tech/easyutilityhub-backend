@@ -21,7 +21,7 @@ export default async function handler(request, response) {
   }
 
   // Use the correct model name that works for your key
-  const googleApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+  const googleApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
 
   // Re-create the prompt on the server side
   const prompt = `Generate a single, family-friendly English word or short phrase for a hangman game, related to the category '${category}' ${lengthConstraint}. Also provide a one-sentence clever hint for that word or phrase.`;
@@ -73,4 +73,5 @@ export default async function handler(request, response) {
     console.error("Vercel Function Error (Hangman):", error.message);
     return response.status(500).json({ success: false, message: 'ERROR: The AI service returned an error.' });
   }
+
 }
