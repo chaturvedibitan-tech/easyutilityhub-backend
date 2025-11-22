@@ -21,7 +21,7 @@ export default async function handler(request, response) {
   }
 
   // Use the correct model name that works for your key
-  const googleApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+  const googleApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
 
   // Re-create the prompt on the server side
   const safeContext = context || 'a new brand name'; // Provide default context if none given
@@ -70,4 +70,5 @@ export default async function handler(request, response) {
     console.error("Vercel Function Error (Name Combiner):", error.message);
     return response.status(500).json({ success: false, message: 'ERROR: The AI service returned an error.' });
   }
+
 }
