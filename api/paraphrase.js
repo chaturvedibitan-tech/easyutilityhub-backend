@@ -31,7 +31,7 @@ async function handler(req, res) {
   }
 
   // --- Gemini API Configuration ---
-  const geminiApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+  const geminiApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
 
   // --- Prompt ---
   // The prompt is dynamically built based on the selected mode
@@ -145,3 +145,4 @@ async function handler(req, res) {
 
 // Wrap the handler with CORS
 export default allowCors(handler);
+
