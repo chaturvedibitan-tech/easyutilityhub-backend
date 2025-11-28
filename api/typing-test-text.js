@@ -24,7 +24,7 @@ export default async function handler(request, response) {
 
     // 3. AI Request
     // FIXED: Changed '2.5' to '1.5' (The correct model name)
-    const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+    const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
 
     const prompt = `
       Generate a coherent, interesting paragraph for a typing speed test.
@@ -66,3 +66,4 @@ export default async function handler(request, response) {
     return response.status(500).json({ success: false, message: error.message });
   }
 }
+
