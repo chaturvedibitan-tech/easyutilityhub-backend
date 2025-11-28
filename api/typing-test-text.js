@@ -1,44 +1,34 @@
 export default async function handler(request, response) {
-  // 1. CORS
+  // 1. CORS Headers
   response.setHeader('Access-Control-Allow-Origin', '*');
   response.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   response.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  if (request.method === 'OPTIONS') {
-    return response.status(200).end();
-  }
+  if (request.method === 'OPTIONS') return response.status(200).end();
 
   try {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return response.status(500).json({ success: false, message: 'Server Config Error: API Key missing.' });
 
-    const { category, duration, difficulty } = request.body;
+    const { category, duration } = request.body;
 
-    // Calculate word count target (approx 60 WPM)
-    const seconds = duration ? parseInt(duration) : 60;
-    const wordCount = Math.ceil((seconds / 60) * 60) + 20; 
-
-    // 2. Define Difficulty Rules
-    let stylePrompt = "Standard vocabulary and sentence structure.";
-    if (difficulty === 'easy') {
-        stylePrompt = "Use very simple, common words (top 500 english words). Short, simple sentences. No complex punctuation.";
-    } else if (difficulty === 'hard') {
-        stylePrompt = "Use advanced vocabulary, technical terms, and complex sentence structures with varied punctuation (commas, semi-colons).";
-    }
+    // Exam Standard: Ensure enough text for high speeds (100 WPM+)
+    // 2 minutes * 100 WPM = 200 words. We request 300 to be safe.
+    const wordCount = 300; 
 
     // 3. AI Request
-    const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+    const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
 
     const prompt = `
-      Generate a coherent paragraph for a typing speed test.
+      Generate a professional typing test passage.
       Topic: ${category || "General Knowledge"}
-      Difficulty Level: ${difficulty || "medium"}
-      Constraint: ${stylePrompt}
       Length: Approximately ${wordCount} words.
       
       Rules:
-      1. Plain text only. No markdown, no titles, no bullets.
-      2. Do not include newlines (return a single long string).
+      1. Plain text paragraph format. No titles, no markdown, no bullet points.
+      2. Use standard English punctuation (commas, periods, capitalization).
+      3. Ensure the text flows logically (like an article or essay snippet).
+      4. Do not include newlines or line breaks.
     `;
 
     const googleResponse = await fetch(baseUrl, {
@@ -53,9 +43,9 @@ export default async function handler(request, response) {
 
     let text = result.candidates?.[0]?.content?.parts?.[0]?.text;
     
-    // Cleanup
+    // Cleanup: Flatten to single line for smooth scrolling
     if (text) {
-        text = text.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+        text = text.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
     } else {
         throw new Error("AI returned empty response");
     }
