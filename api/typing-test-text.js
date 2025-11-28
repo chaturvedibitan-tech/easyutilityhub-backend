@@ -1,57 +1,58 @@
-// This is the new messenger for the Typing Speed Test's AI text generator.
 export default async function handler(request, response) {
-  // --- Security Rules (CORS Headers) ---
-  response.setHeader('Access-Control-Allow-Origin', 'https://easyutilityhub.com');
+  // 1. CORS
+  response.setHeader('Access-Control-Allow-Origin', '*');
   response.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   response.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  if (request.method === 'OPTIONS') {
-    return response.status(200).end();
-  }
+  if (request.method === 'OPTIONS') return response.status(200).end();
 
-  // --- Main Logic ---
-  const { category } = request.body; // Get category from the request
-  const apiKey = process.env.GEMINI_API_KEY; // Securely get the Gemini key
+  // 2. Validation
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return response.status(500).json({ success: false, message: 'API Key missing.' });
 
-  if (!category) {
-    return response.status(400).json({ success: false, message: 'ERROR: Category is required.' });
-  }
-  if (!apiKey) {
-    return response.status(500).json({ success: false, message: 'ERROR: API Key is not configured on the server.' });
-  }
+  const { category, duration } = request.body;
+  
+  // Calculate approximate word count needed (avg 60 wpm * minutes) + buffer
+  const minutes = parseInt(duration) / 60;
+  const wordCount = Math.ceil(60 * minutes) + 30; // Buffer 
 
-  // Use the correct model name that works for your key
-  const googleApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+  // 3. AI Request
+  const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
 
-  // Re-create the prompt on the server side
-  const prompt = `Generate one single, family-friendly paragraph of about 40-50 words for a typing speed test, related to the category '${category}'. The text should be interesting, contain a mix of common English words, and use standard punctuation. Only return the generated text, with no extra commentary.`;
-
-  const payload = {
-    contents: [{ parts: [{ text: prompt }] }],
-  };
+  const prompt = `
+    Generate a coherent, interesting paragraph for a typing speed test.
+    Topic: ${category} (General, Technology, History, or Science).
+    Length: Approximately ${wordCount} words.
+    
+    Rules:
+    1. Plain text only. No markdown, no titles, no bullets.
+    2. Use standard punctuation.
+    3. Do not include newlines (single paragraph).
+  `;
 
   try {
-    const googleResponse = await fetch(googleApiUrl, {
+    const googleResponse = await fetch(baseUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
     });
 
     const result = await googleResponse.json();
+    if (result.error) throw new Error(result.error.message);
 
-    if (result.error) {
-       throw new Error(result.error.message);
+    let text = result.candidates?.[0]?.content?.parts?.[0]?.text;
+    
+    // Clean up
+    if (text) {
+        text = text.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+    } else {
+        throw new Error("AI returned empty response");
     }
 
-    // Extract the plain text response from the AI
-    const generatedText = result.candidates[0].content.parts[0].text;
-
-    // Send the successful result back to your website
-    return response.status(200).json({ success: true, text: generatedText });
+    return response.status(200).json({ success: true, text: text });
 
   } catch (error) {
-    console.error("Vercel Function Error (Typing Test):", error.message);
-    return response.status(500).json({ success: false, message: 'ERROR: The AI service returned an error.' });
+    console.error("Backend Error:", error);
+    return response.status(500).json({ success: false, message: error.message });
   }
-
 }
